@@ -1,7 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type AuthMode = "signup" | "login";
-type UserRole = "admin" | "member";
+type UserRole = "admin" | "member" | "teacher";
 
 type CommunityClass = {
   id: string;
@@ -13,6 +13,7 @@ type CommunityClass = {
   capacity: number;
   created_at: string;
   created_by: string;
+  teacher_id: string | null;
 };
 
 type MemberClass = CommunityClass & {
@@ -25,6 +26,17 @@ type AuthResponse = {
   message?: string;
   accessToken?: string | null;
   role?: UserRole;
+};
+
+type UserRecord = {
+  id: string;
+  email: string;
+  role: UserRole;
+};
+
+type Teacher = {
+  id: string;
+  email: string;
 };
 
 const envApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim();
@@ -52,7 +64,9 @@ async function parseApiJson<T>(response: Response): Promise<T> {
 }
 
 function roleTitle(role: UserRole) {
-  return role === "admin" ? "Admin" : "Member";
+  if (role === "admin") return "Admin";
+  if (role === "teacher") return "Teacher";
+  return "Member";
 }
 
 export default function App() {
@@ -67,6 +81,7 @@ export default function App() {
   const [classesLoading, setClassesLoading] = useState(false);
   const [adminClasses, setAdminClasses] = useState<CommunityClass[]>([]);
   const [memberClasses, setMemberClasses] = useState<MemberClass[]>([]);
+  const [teacherClasses, setTeacherClasses] = useState<CommunityClass[]>([]);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -74,14 +89,33 @@ export default function App() {
   const [location, setLocation] = useState("");
   const [startsAt, setStartsAt] = useState("");
   const [capacity, setCapacity] = useState("20");
+  const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [createLoading, setCreateLoading] = useState(false);
+
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [promotingUserId, setPromotingUserId] = useState<string | null>(null);
 
   const [registeringClassId, setRegisteringClassId] = useState<string | null>(null);
 
+  // Teacher edit state
+  const [editingClassId, setEditingClassId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editInstructorName, setEditInstructorName] = useState("");
+  const [editLocation, setEditLocation] = useState("");
+  const [editStartsAt, setEditStartsAt] = useState("");
+  const [editCapacity, setEditCapacity] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
+
+  const [groqMessage, setGroqMessage] = useState("");
+  const [groqReply, setGroqReply] = useState("");
+  const [groqLoading, setGroqLoading] = useState(false);
+
   const dashboardTitle = useMemo(() => {
-    if (!currentRole) {
-      return "Community Classes";
-    }
+    if (!currentRole) return "Community Classes";
     return `${roleTitle(currentRole)} Dashboard`;
   }, [currentRole]);
 
@@ -89,20 +123,37 @@ export default function App() {
     setClassesLoading(true);
     try {
       const response = await fetch(apiUrl("/api/admin/classes"), {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        headers: { Authorization: `Bearer ${token}` }
       });
-
       const data = await parseApiJson<CommunityClass[] | AuthResponse>(response);
-      if (!response.ok) {
-        const errorData = data as AuthResponse;
-        throw new Error(errorData.error ?? "Could not load classes.");
-      }
-
+      if (!response.ok) throw new Error((data as AuthResponse).error ?? "Could not load classes.");
       setAdminClasses(data as CommunityClass[]);
     } finally {
       setClassesLoading(false);
+    }
+  }
+
+  async function loadTeachers(token: string) {
+    const response = await fetch(apiUrl("/api/admin/teachers"), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (response.ok) {
+      const data = await parseApiJson<Teacher[]>(response);
+      setTeachers(data);
+    }
+  }
+
+  async function loadUsers(token: string) {
+    setUsersLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/admin/users"), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await parseApiJson<UserRecord[] | AuthResponse>(response);
+      if (!response.ok) throw new Error((data as AuthResponse).error ?? "Could not load users.");
+      setUsers(data as UserRecord[]);
+    } finally {
+      setUsersLoading(false);
     }
   }
 
@@ -110,18 +161,25 @@ export default function App() {
     setClassesLoading(true);
     try {
       const response = await fetch(apiUrl("/api/member/classes"), {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        headers: { Authorization: `Bearer ${token}` }
       });
-
       const data = await parseApiJson<MemberClass[] | AuthResponse>(response);
-      if (!response.ok) {
-        const errorData = data as AuthResponse;
-        throw new Error(errorData.error ?? "Could not load classes.");
-      }
-
+      if (!response.ok) throw new Error((data as AuthResponse).error ?? "Could not load classes.");
       setMemberClasses(data as MemberClass[]);
+    } finally {
+      setClassesLoading(false);
+    }
+  }
+
+  async function loadTeacherClasses(token: string) {
+    setClassesLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/teacher/classes"), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await parseApiJson<CommunityClass[] | AuthResponse>(response);
+      if (!response.ok) throw new Error((data as AuthResponse).error ?? "Could not load classes.");
+      setTeacherClasses(data as CommunityClass[]);
     } finally {
       setClassesLoading(false);
     }
@@ -129,12 +187,22 @@ export default function App() {
 
   async function loadDashboard(role: UserRole, token: string) {
     if (role === "admin") {
-      await loadAdminClasses(token);
+      await Promise.all([loadAdminClasses(token), loadTeachers(token), loadUsers(token)]);
       return;
     }
-
+    if (role === "teacher") {
+      await loadTeacherClasses(token);
+      return;
+    }
     await loadMemberClasses(token);
   }
+
+  // Keep teachers list in sync when users change role
+  useEffect(() => {
+    if (accessToken && currentRole === "admin") {
+      loadTeachers(accessToken);
+    }
+  }, [users]);
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -143,14 +211,10 @@ export default function App() {
 
     try {
       const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
-      const payload = { email, password };
-
       const response = await fetch(apiUrl(endpoint), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
       });
 
       const data = await parseApiJson<AuthResponse>(response);
@@ -161,10 +225,7 @@ export default function App() {
       }
 
       if (!data.accessToken) {
-        setStatus(
-          data.message ??
-            "Account created. Confirm your email in Supabase settings before logging in."
-        );
+        setStatus(data.message ?? "Account created. Confirm your email in Supabase settings before logging in.");
         return;
       }
 
@@ -178,13 +239,39 @@ export default function App() {
       setStatus(data.message ?? "Authenticated.");
       await loadDashboard(data.role, data.accessToken);
     } catch (error) {
-      if (error instanceof Error) {
-        setStatus(error.message);
-        return;
-      }
-      setStatus("Could not reach the backend API.");
+      setStatus(error instanceof Error ? error.message : "Could not reach the backend API.");
     } finally {
       setAuthLoading(false);
+    }
+  }
+
+  async function handlePromote(userId: string, role: UserRole) {
+    if (!accessToken) return;
+    setPromotingUserId(userId);
+    setStatus("");
+
+    try {
+      const response = await fetch(apiUrl(`/api/admin/users/${userId}/promote`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ role })
+      });
+
+      const data = await parseApiJson<AuthResponse>(response);
+      if (!response.ok) {
+        setStatus(data.error ?? "Could not update role.");
+        return;
+      }
+
+      setStatus(data.message ?? "Role updated.");
+      await loadUsers(accessToken);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update role.");
+    } finally {
+      setPromotingUserId(null);
     }
   }
 
@@ -207,7 +294,6 @@ export default function App() {
       setStatus("Start time must be a valid date and time.");
       return;
     }
-    const startsAtIso = new Date(startsAtMs).toISOString();
 
     setCreateLoading(true);
     setStatus("");
@@ -224,8 +310,9 @@ export default function App() {
           description,
           instructorName,
           location,
-          startsAt: startsAtIso,
-          capacity: capacityValue
+          startsAt: new Date(startsAtMs).toISOString(),
+          capacity: capacityValue,
+          teacherId: selectedTeacherId || null
         })
       });
 
@@ -242,15 +329,79 @@ export default function App() {
       setLocation("");
       setStartsAt("");
       setCapacity("20");
+      setSelectedTeacherId("");
       await loadAdminClasses(accessToken);
     } catch (error) {
-      if (error instanceof Error) {
-        setStatus(error.message);
-        return;
-      }
-      setStatus("Could not create class.");
+      setStatus(error instanceof Error ? error.message : "Could not create class.");
     } finally {
       setCreateLoading(false);
+    }
+  }
+
+  function startEditClass(item: CommunityClass) {
+    setEditingClassId(item.id);
+    setEditTitle(item.title);
+    setEditDescription(item.description);
+    setEditInstructorName(item.instructor_name);
+    setEditLocation(item.location);
+    // Convert ISO string to datetime-local format
+    const d = new Date(item.starts_at);
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 16);
+    setEditStartsAt(local);
+    setEditCapacity(String(item.capacity));
+  }
+
+  async function handleEditClass(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!accessToken || !editingClassId) return;
+
+    const capacityValue = Number(editCapacity);
+    if (!Number.isInteger(capacityValue) || capacityValue <= 0) {
+      setStatus("Capacity must be a positive number.");
+      return;
+    }
+
+    const startsAtMs = Date.parse(editStartsAt);
+    if (Number.isNaN(startsAtMs)) {
+      setStatus("Start time must be a valid date and time.");
+      return;
+    }
+
+    setEditLoading(true);
+    setStatus("");
+
+    try {
+      const response = await fetch(apiUrl(`/api/teacher/classes/${editingClassId}`), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          title: editTitle,
+          description: editDescription,
+          instructorName: editInstructorName,
+          location: editLocation,
+          startsAt: new Date(startsAtMs).toISOString(),
+          capacity: capacityValue
+        })
+      });
+
+      const data = await parseApiJson<CommunityClass | AuthResponse>(response);
+      if (!response.ok) {
+        setStatus((data as AuthResponse).error ?? "Could not update class.");
+        return;
+      }
+
+      setStatus("Class updated.");
+      setEditingClassId(null);
+      await loadTeacherClasses(accessToken);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update class.");
+    } finally {
+      setEditLoading(false);
     }
   }
 
@@ -282,13 +433,41 @@ export default function App() {
       setStatus(data.message ?? "Registration successful.");
       await loadMemberClasses(accessToken);
     } catch (error) {
-      if (error instanceof Error) {
-        setStatus(error.message);
-        return;
-      }
-      setStatus("Could not complete registration.");
+      setStatus(error instanceof Error ? error.message : "Could not complete registration.");
     } finally {
       setRegisteringClassId(null);
+    }
+  }
+
+  async function handleGroqChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!accessToken) return;
+
+    setGroqLoading(true);
+    setGroqReply("");
+
+    try {
+      const response = await fetch(apiUrl("/api/groq/chat"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ message: groqMessage })
+      });
+
+      const data = await parseApiJson<{ reply?: string; error?: string }>(response);
+      if (!response.ok) {
+        setGroqReply(data.error ?? "Could not get a response.");
+        return;
+      }
+
+      setGroqReply(data.reply ?? "");
+      setGroqMessage("");
+    } catch (error) {
+      setGroqReply(error instanceof Error ? error.message : "Could not reach the AI assistant.");
+    } finally {
+      setGroqLoading(false);
     }
   }
 
@@ -297,6 +476,9 @@ export default function App() {
     setCurrentRole(null);
     setAdminClasses([]);
     setMemberClasses([]);
+    setTeacherClasses([]);
+    setUsers([]);
+    setTeachers([]);
     setStatus("Logged out.");
   }
 
@@ -338,40 +520,38 @@ export default function App() {
               type="email"
               placeholder="Email address"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
             <input
               type="password"
               placeholder="Password (8+ characters)"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               minLength={8}
               required
             />
             <button type="submit" disabled={authLoading}>
-              {authLoading
-                ? "Please wait..."
-                : authMode === "signup"
-                  ? "Create Member Account"
-                  : "Log In"}
+              {authLoading ? "Please wait..." : authMode === "signup" ? "Create Member Account" : "Log In"}
             </button>
           </form>
+
         ) : currentRole === "admin" ? (
           <>
+            {/* Create Class */}
             <form onSubmit={handleCreateClass} className="stack">
               <h2>Create a Class</h2>
               <input
                 type="text"
                 placeholder="Class title"
                 value={title}
-                onChange={(event) => setTitle(event.target.value)}
+                onChange={(e) => setTitle(e.target.value)}
                 required
               />
               <textarea
                 placeholder="Class description"
                 value={description}
-                onChange={(event) => setDescription(event.target.value)}
+                onChange={(e) => setDescription(e.target.value)}
                 rows={4}
                 required
               />
@@ -379,21 +559,21 @@ export default function App() {
                 type="text"
                 placeholder="Instructor name"
                 value={instructorName}
-                onChange={(event) => setInstructorName(event.target.value)}
+                onChange={(e) => setInstructorName(e.target.value)}
                 required
               />
               <input
                 type="text"
                 placeholder="Location"
                 value={location}
-                onChange={(event) => setLocation(event.target.value)}
+                onChange={(e) => setLocation(e.target.value)}
                 required
               />
               <div className="split">
                 <input
                   type="datetime-local"
                   value={startsAt}
-                  onChange={(event) => setStartsAt(event.target.value)}
+                  onChange={(e) => setStartsAt(e.target.value)}
                   required
                 />
                 <input
@@ -401,15 +581,27 @@ export default function App() {
                   min={1}
                   max={1000}
                   value={capacity}
-                  onChange={(event) => setCapacity(event.target.value)}
+                  onChange={(e) => setCapacity(e.target.value)}
                   required
                 />
               </div>
+              <select
+                value={selectedTeacherId}
+                onChange={(e) => setSelectedTeacherId(e.target.value)}
+              >
+                <option value="">— No teacher assigned —</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.email}
+                  </option>
+                ))}
+              </select>
               <button type="submit" disabled={createLoading}>
                 {createLoading ? "Saving..." : "Add Class"}
               </button>
             </form>
 
+            {/* All Classes */}
             <section className="stack">
               <h2>All Classes</h2>
               {classesLoading ? (
@@ -418,28 +610,157 @@ export default function App() {
                 <p>No classes yet.</p>
               ) : (
                 <ul className="class-list">
-                  {adminClasses.map((item) => (
-                    <li key={item.id} className="class-card">
-                      <h3>{item.title}</h3>
-                      <p>{item.description}</p>
-                      <p>
-                        <strong>Instructor:</strong> {item.instructor_name}
-                      </p>
-                      <p>
-                        <strong>Location:</strong> {item.location}
-                      </p>
-                      <p>
-                        <strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}
-                      </p>
-                      <p>
-                        <strong>Capacity:</strong> {item.capacity}
-                      </p>
+                  {adminClasses.map((item) => {
+                    const assignedTeacher = teachers.find((t) => t.id === item.teacher_id);
+                    return (
+                      <li key={item.id} className="class-card">
+                        <h3>{item.title}</h3>
+                        <p>{item.description}</p>
+                        <p><strong>Instructor:</strong> {item.instructor_name}</p>
+                        <p><strong>Location:</strong> {item.location}</p>
+                        <p><strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}</p>
+                        <p><strong>Capacity:</strong> {item.capacity}</p>
+                        {assignedTeacher && (
+                          <p><strong>Teacher:</strong> {assignedTeacher.email}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            {/* Manage Users */}
+            <section className="stack">
+              <h2>Manage Users</h2>
+              {usersLoading ? (
+                <p>Loading users...</p>
+              ) : users.length === 0 ? (
+                <p>No users found.</p>
+              ) : (
+                <ul className="class-list">
+                  {users.map((u) => (
+                    <li key={u.id} className="class-card">
+                      <p><strong>{u.email}</strong></p>
+                      <p>Role: <em>{u.role}</em></p>
+                      <div className="split">
+                        {u.role !== "teacher" && (
+                          <button
+                            type="button"
+                            disabled={promotingUserId === u.id}
+                            onClick={() => handlePromote(u.id, "teacher")}
+                          >
+                            {promotingUserId === u.id ? "Updating..." : "Make Teacher"}
+                          </button>
+                        )}
+                        {u.role !== "member" && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={promotingUserId === u.id}
+                            onClick={() => handlePromote(u.id, "member")}
+                          >
+                            {promotingUserId === u.id ? "Updating..." : "Make Member"}
+                          </button>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
               )}
             </section>
           </>
+
+        ) : currentRole === "teacher" ? (
+          <section className="stack">
+            <h2>My Assigned Classes</h2>
+            {classesLoading ? (
+              <p>Loading classes...</p>
+            ) : teacherClasses.length === 0 ? (
+              <p>No classes assigned to you yet.</p>
+            ) : (
+              <ul className="class-list">
+                {teacherClasses.map((item) => (
+                  <li key={item.id} className="class-card">
+                    {editingClassId === item.id ? (
+                      <form onSubmit={handleEditClass} className="stack">
+                        <h3>Edit Class</h3>
+                        <input
+                          type="text"
+                          placeholder="Class title"
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          required
+                        />
+                        <textarea
+                          placeholder="Class description"
+                          value={editDescription}
+                          onChange={(e) => setEditDescription(e.target.value)}
+                          rows={4}
+                          required
+                        />
+                        <input
+                          type="text"
+                          placeholder="Instructor name"
+                          value={editInstructorName}
+                          onChange={(e) => setEditInstructorName(e.target.value)}
+                          required
+                        />
+                        <input
+                          type="text"
+                          placeholder="Location"
+                          value={editLocation}
+                          onChange={(e) => setEditLocation(e.target.value)}
+                          required
+                        />
+                        <div className="split">
+                          <input
+                            type="datetime-local"
+                            value={editStartsAt}
+                            onChange={(e) => setEditStartsAt(e.target.value)}
+                            required
+                          />
+                          <input
+                            type="number"
+                            min={1}
+                            max={1000}
+                            value={editCapacity}
+                            onChange={(e) => setEditCapacity(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="split">
+                          <button type="submit" disabled={editLoading}>
+                            {editLoading ? "Saving..." : "Save Changes"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setEditingClassId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <h3>{item.title}</h3>
+                        <p>{item.description}</p>
+                        <p><strong>Instructor:</strong> {item.instructor_name}</p>
+                        <p><strong>Location:</strong> {item.location}</p>
+                        <p><strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}</p>
+                        <p><strong>Capacity:</strong> {item.capacity}</p>
+                        <button type="button" onClick={() => startEditClass(item)}>
+                          Edit Class
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
         ) : (
           <section className="stack">
             <h2>Available Classes</h2>
@@ -455,18 +776,10 @@ export default function App() {
                     <li key={item.id} className="class-card">
                       <h3>{item.title}</h3>
                       <p>{item.description}</p>
-                      <p>
-                        <strong>Instructor:</strong> {item.instructor_name}
-                      </p>
-                      <p>
-                        <strong>Location:</strong> {item.location}
-                      </p>
-                      <p>
-                        <strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}
-                      </p>
-                      <p>
-                        <strong>Registered:</strong> {item.registrationCount}/{item.capacity}
-                      </p>
+                      <p><strong>Instructor:</strong> {item.instructor_name}</p>
+                      <p><strong>Location:</strong> {item.location}</p>
+                      <p><strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}</p>
+                      <p><strong>Registered:</strong> {item.registrationCount}/{item.capacity}</p>
                       <button
                         type="button"
                         disabled={item.isRegistered || isFull || registeringClassId === item.id}
@@ -484,6 +797,29 @@ export default function App() {
                   );
                 })}
               </ul>
+            )}
+          </section>
+        )}
+
+        {accessToken && (
+          <section className="stack">
+            <h2>Ask AI Assistant</h2>
+            <form onSubmit={handleGroqChat} className="stack">
+              <textarea
+                placeholder="Ask a question about classes, schedules, or anything else..."
+                value={groqMessage}
+                onChange={(e) => setGroqMessage(e.target.value)}
+                rows={3}
+                required
+              />
+              <button type="submit" disabled={groqLoading}>
+                {groqLoading ? "Thinking..." : "Ask"}
+              </button>
+            </form>
+            {groqReply && (
+              <div className="groq-reply">
+                <p>{groqReply}</p>
+              </div>
             )}
           </section>
         )}

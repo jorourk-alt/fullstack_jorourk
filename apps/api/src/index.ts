@@ -2,11 +2,12 @@ import cors from "cors";
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
+import Groq from "groq-sdk";
 import { z } from "zod";
 
 dotenv.config();
 
-type UserRole = "admin" | "member";
+type UserRole = "admin" | "member" | "teacher";
 
 type AuthResponse = {
   error?: string;
@@ -37,6 +38,7 @@ if (!supabaseUrl || !supabasePublishableKey || !supabaseServiceRoleKey) {
 
 const authClient = createClient(supabaseUrl, supabasePublishableKey);
 const dbClient = createClient(supabaseUrl, supabaseServiceRoleKey);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const app = express();
 
@@ -72,23 +74,42 @@ const createClassSchema = z.object({
   startsAt: z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
     message: "startsAt must be an ISO 8601 date-time string"
   }),
-  capacity: z.number().int().min(1).max(1000)
+  capacity: z.number().int().min(1).max(1000),
+  teacherId: z.string().uuid().nullable().optional()
+});
+
+const updateClassSchema = z.object({
+  title: z.string().min(2).max(120).optional(),
+  description: z.string().min(10).max(2000).optional(),
+  instructorName: z.string().min(2).max(120).optional(),
+  location: z.string().min(2).max(120).optional(),
+  startsAt: z
+    .string()
+    .refine((value) => !Number.isNaN(Date.parse(value)), {
+      message: "startsAt must be an ISO 8601 date-time string"
+    })
+    .optional(),
+  capacity: z.number().int().min(1).max(1000).optional()
 });
 
 const registerSchema = z.object({
   classId: z.string().uuid()
 });
 
-const classInsertSchema = z
-  .object({
-    created_by: z.string().uuid(),
-    title: z.string(),
-    description: z.string(),
-    instructor_name: z.string(),
-    location: z.string(),
-    starts_at: z.string(),
-    capacity: z.number().int()
-  });
+const promoteSchema = z.object({
+  role: z.enum(["admin", "member", "teacher"])
+});
+
+const classInsertSchema = z.object({
+  created_by: z.string().uuid(),
+  title: z.string(),
+  description: z.string(),
+  instructor_name: z.string(),
+  location: z.string(),
+  starts_at: z.string(),
+  capacity: z.number().int(),
+  teacher_id: z.string().uuid().nullable().optional()
+});
 
 type CommunityClass = {
   id: string;
@@ -100,6 +121,12 @@ type CommunityClass = {
   capacity: number;
   created_at: string;
   created_by: string;
+  teacher_id: string | null;
+};
+
+type UserRecord = {
+  id: string;
+  role: UserRole;
 };
 
 function readBearerToken(request: Request) {
@@ -127,7 +154,7 @@ async function fetchUserRole(userId: string): Promise<UserRole | null> {
     return null;
   }
 
-  if (data.role !== "admin" && data.role !== "member") {
+  if (data.role !== "admin" && data.role !== "member" && data.role !== "teacher") {
     return null;
   }
 
@@ -265,6 +292,96 @@ app.get("/api/auth/me", async (request, response) => {
   });
 });
 
+// Admin: list all users with their roles
+app.get("/api/admin/users", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { data, error } = await dbClient
+    .from("users")
+    .select("id, role")
+    .order("role", { ascending: true });
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  // Fetch emails from auth
+  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
+  if (authError) {
+    response.status(500).json({ error: authError.message });
+    return;
+  }
+
+  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+
+  const result = (data ?? []).map((row: UserRecord) => ({
+    id: row.id,
+    email: emailMap.get(row.id) ?? row.id,
+    role: row.role
+  }));
+
+  response.json(result);
+});
+
+// Admin: promote/demote a user's role
+app.post("/api/admin/users/:userId/promote", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { userId } = request.params;
+
+  const parsed = promoteSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Role must be admin, member, or teacher." });
+    return;
+  }
+
+  const { error } = await dbClient
+    .from("users")
+    .update({ role: parsed.data.role })
+    .eq("id", userId);
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json({ message: `User role updated to ${parsed.data.role}.` });
+});
+
+// Admin: list teachers (for class assignment dropdown)
+app.get("/api/admin/teachers", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { data, error } = await dbClient
+    .from("users")
+    .select("id, role")
+    .eq("role", "teacher");
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
+  if (authError) {
+    response.status(500).json({ error: authError.message });
+    return;
+  }
+
+  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+
+  const result = (data ?? []).map((row: UserRecord) => ({
+    id: row.id,
+    email: emailMap.get(row.id) ?? row.id
+  }));
+
+  response.json(result);
+});
+
 app.get("/api/admin/classes", async (request, response) => {
   const user = await requireUser(request, response, ["admin"]);
   if (!user) {
@@ -273,7 +390,7 @@ app.get("/api/admin/classes", async (request, response) => {
 
   const { data, error } = await dbClient
     .from("community_classes")
-    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by")
+    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by, teacher_id")
     .order("starts_at", { ascending: true });
 
   if (error) {
@@ -307,13 +424,14 @@ app.post("/api/admin/classes", async (request, response) => {
     instructor_name: parsed.data.instructorName,
     location: parsed.data.location,
     starts_at: new Date(parsed.data.startsAt).toISOString(),
-    capacity: parsed.data.capacity
+    capacity: parsed.data.capacity,
+    teacher_id: parsed.data.teacherId ?? null
   });
 
   const { data, error } = await dbClient
     .from("community_classes")
     .insert(classPayload)
-    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by")
+    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by, teacher_id")
     .single();
 
   if (error) {
@@ -332,7 +450,7 @@ app.get("/api/member/classes", async (request, response) => {
 
   const { data: classes, error: classesError } = await dbClient
     .from("community_classes")
-    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by")
+    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by, teacher_id")
     .order("starts_at", { ascending: true });
 
   if (classesError) {
@@ -447,6 +565,128 @@ app.post("/api/member/registrations", async (request, response) => {
   }
 
   response.status(201).json({ message: "Registration successful." } satisfies AuthResponse);
+});
+
+// Teacher: get assigned classes
+app.get("/api/teacher/classes", async (request, response) => {
+  const user = await requireUser(request, response, ["teacher"]);
+  if (!user) return;
+
+  const { data, error } = await dbClient
+    .from("community_classes")
+    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by, teacher_id")
+    .eq("teacher_id", user.id)
+    .order("starts_at", { ascending: true });
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json(data ?? []);
+});
+
+// Teacher: edit an assigned class
+app.patch("/api/teacher/classes/:classId", async (request, response) => {
+  const user = await requireUser(request, response, ["teacher"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+
+  // Verify this class is assigned to this teacher
+  const { data: classRecord, error: fetchError } = await dbClient
+    .from("community_classes")
+    .select("id, teacher_id")
+    .eq("id", classId)
+    .maybeSingle();
+
+  if (fetchError) {
+    response.status(500).json({ error: fetchError.message });
+    return;
+  }
+
+  if (!classRecord) {
+    response.status(404).json({ error: "Class not found." });
+    return;
+  }
+
+  if (classRecord.teacher_id !== user.id) {
+    response.status(403).json({ error: "You are not assigned to this class." });
+    return;
+  }
+
+  const parsed = updateClassSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid update payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (parsed.data.title !== undefined) updates.title = parsed.data.title;
+  if (parsed.data.description !== undefined) updates.description = parsed.data.description;
+  if (parsed.data.instructorName !== undefined) updates.instructor_name = parsed.data.instructorName;
+  if (parsed.data.location !== undefined) updates.location = parsed.data.location;
+  if (parsed.data.startsAt !== undefined) updates.starts_at = new Date(parsed.data.startsAt).toISOString();
+  if (parsed.data.capacity !== undefined) updates.capacity = parsed.data.capacity;
+
+  if (Object.keys(updates).length === 0) {
+    response.status(400).json({ error: "No fields to update." });
+    return;
+  }
+
+  const { data, error } = await dbClient
+    .from("community_classes")
+    .update(updates)
+    .eq("id", classId)
+    .select("id, title, description, instructor_name, location, starts_at, capacity, created_at, created_by, teacher_id")
+    .single();
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json(data);
+});
+
+const groqChatSchema = z.object({
+  message: z.string().min(1).max(2000)
+});
+
+app.post("/api/groq/chat", async (request, response) => {
+  const user = await requireUser(request, response);
+  if (!user) {
+    return;
+  }
+
+  const parsed = groqChatSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Message must be between 1 and 2000 characters." });
+    return;
+  }
+
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a helpful assistant for a community classes platform. You help users find information about classes, scheduling, registration, and community programs. Be concise and friendly."
+        },
+        {
+          role: "user",
+          content: parsed.data.message
+        }
+      ],
+      model: "llama-3.3-70b-versatile"
+    });
+
+    const reply = completion.choices[0]?.message?.content ?? "No response generated.";
+    response.json({ reply });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Groq API error.";
+    response.status(502).json({ error: message });
+  }
 });
 
 app.listen(port, () => {
