@@ -68,7 +68,7 @@ const loginSchema = z.object({
 
 const createClassSchema = z.object({
   title: z.string().min(2).max(120),
-  description: z.string().min(10).max(2000),
+  description: z.string().min(2).max(2000),
   instructorName: z.string().min(2).max(120),
   location: z.string().min(2).max(120),
   startsAt: z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
@@ -80,7 +80,7 @@ const createClassSchema = z.object({
 
 const updateClassSchema = z.object({
   title: z.string().min(2).max(120).optional(),
-  description: z.string().min(10).max(2000).optional(),
+  description: z.string().min(2).max(2000).optional(),
   instructorName: z.string().min(2).max(120).optional(),
   location: z.string().min(2).max(120).optional(),
   startsAt: z
