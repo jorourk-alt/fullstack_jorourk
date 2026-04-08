@@ -96,6 +96,18 @@ const registerSchema = z.object({
   classId: z.string().uuid()
 });
 
+const attendanceSubmitSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+  records: z
+    .array(
+      z.object({
+        memberId: z.string().uuid(),
+        status: z.enum(["present", "absent", "late"])
+      })
+    )
+    .min(1)
+});
+
 const promoteSchema = z.object({
   role: z.enum(["admin", "member", "teacher"])
 });
@@ -647,6 +659,161 @@ app.patch("/api/teacher/classes/:classId", async (request, response) => {
   }
 
   response.json(data);
+});
+
+// Teacher: get students enrolled in a class
+app.get("/api/teacher/classes/:classId/students", async (request, response) => {
+  const user = await requireUser(request, response, ["teacher"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+
+  const { data: classRecord, error: fetchError } = await dbClient
+    .from("community_classes")
+    .select("id, teacher_id")
+    .eq("id", classId)
+    .maybeSingle();
+
+  if (fetchError) {
+    response.status(500).json({ error: fetchError.message });
+    return;
+  }
+  if (!classRecord) {
+    response.status(404).json({ error: "Class not found." });
+    return;
+  }
+  if (classRecord.teacher_id !== user.id) {
+    response.status(403).json({ error: "You are not assigned to this class." });
+    return;
+  }
+
+  const { data: registrations, error: regError } = await dbClient
+    .from("class_registrations")
+    .select("member_id")
+    .eq("class_id", classId);
+
+  if (regError) {
+    response.status(500).json({ error: regError.message });
+    return;
+  }
+
+  if (!registrations || registrations.length === 0) {
+    response.json([]);
+    return;
+  }
+
+  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
+  if (authError) {
+    response.status(500).json({ error: authError.message });
+    return;
+  }
+
+  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+
+  const result = registrations.map((r: { member_id: string }) => ({
+    id: r.member_id,
+    email: emailMap.get(r.member_id) ?? r.member_id
+  }));
+
+  response.json(result);
+});
+
+// Teacher: get attendance records for a class, optionally filtered by date
+app.get("/api/teacher/classes/:classId/attendance", async (request, response) => {
+  const user = await requireUser(request, response, ["teacher"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+  const date = typeof request.query.date === "string" ? request.query.date : undefined;
+
+  const { data: classRecord, error: fetchError } = await dbClient
+    .from("community_classes")
+    .select("id, teacher_id")
+    .eq("id", classId)
+    .maybeSingle();
+
+  if (fetchError) {
+    response.status(500).json({ error: fetchError.message });
+    return;
+  }
+  if (!classRecord) {
+    response.status(404).json({ error: "Class not found." });
+    return;
+  }
+  if (classRecord.teacher_id !== user.id) {
+    response.status(403).json({ error: "You are not assigned to this class." });
+    return;
+  }
+
+  let query = dbClient
+    .from("attendance")
+    .select("member_id, session_date, status")
+    .eq("class_id", classId);
+
+  if (date) {
+    query = query.eq("session_date", date);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json(data ?? []);
+});
+
+// Teacher: submit (upsert) attendance for a class session
+app.post("/api/teacher/classes/:classId/attendance", async (request, response) => {
+  const user = await requireUser(request, response, ["teacher"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+
+  const { data: classRecord, error: fetchError } = await dbClient
+    .from("community_classes")
+    .select("id, teacher_id")
+    .eq("id", classId)
+    .maybeSingle();
+
+  if (fetchError) {
+    response.status(500).json({ error: fetchError.message });
+    return;
+  }
+  if (!classRecord) {
+    response.status(404).json({ error: "Class not found." });
+    return;
+  }
+  if (classRecord.teacher_id !== user.id) {
+    response.status(403).json({ error: "You are not assigned to this class." });
+    return;
+  }
+
+  const parsed = attendanceSubmitSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid attendance payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const rows = parsed.data.records.map((r) => ({
+    class_id: classId,
+    member_id: r.memberId,
+    session_date: parsed.data.date,
+    status: r.status,
+    marked_by: user.id
+  }));
+
+  const { error } = await dbClient
+    .from("attendance")
+    .upsert(rows, { onConflict: "class_id,member_id,session_date" });
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json({ message: "Attendance saved." } satisfies AuthResponse);
 });
 
 const groqChatSchema = z.object({

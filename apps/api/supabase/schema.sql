@@ -4,7 +4,7 @@ drop table if exists public.camps cascade;
 
 do $$
 begin
-  create type public.user_role as enum ('admin', 'member');
+  create type public.user_role as enum ('admin', 'member', 'teacher');
 exception
   when duplicate_object then null;
 end $$;
@@ -24,8 +24,13 @@ create table if not exists public.community_classes (
   location text not null,
   starts_at timestamptz not null,
   capacity integer not null check (capacity > 0),
+  teacher_id uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now()
 );
+
+-- Upgrade path: add teacher_id to existing deployments
+alter table public.community_classes
+  add column if not exists teacher_id uuid references public.users(id) on delete set null;
 
 create table if not exists public.class_registrations (
   id uuid primary key default gen_random_uuid(),
@@ -97,6 +102,60 @@ create policy "members_can_register_once_per_class"
       from public.users u
       where u.id = auth.uid()
         and u.role = 'member'
+    )
+  );
+
+-- Attendance tracking
+do $$
+begin
+  create type public.attendance_status as enum ('present', 'absent', 'late');
+exception
+  when duplicate_object then null;
+end $$;
+
+create table if not exists public.attendance (
+  id uuid primary key default gen_random_uuid(),
+  class_id uuid not null references public.community_classes(id) on delete cascade,
+  member_id uuid not null references public.users(id) on delete cascade,
+  session_date date not null,
+  status public.attendance_status not null default 'present',
+  marked_by uuid not null references public.users(id),
+  created_at timestamptz not null default now(),
+  unique (class_id, member_id, session_date)
+);
+
+create index if not exists attendance_class_date_idx
+  on public.attendance (class_id, session_date);
+
+alter table public.attendance enable row level security;
+
+drop policy if exists "teachers_can_manage_attendance" on public.attendance;
+create policy "teachers_can_manage_attendance"
+  on public.attendance
+  for all
+  to authenticated
+  using (
+    exists (
+      select 1 from public.community_classes cc
+      where cc.id = class_id and cc.teacher_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.community_classes cc
+      where cc.id = class_id and cc.teacher_id = auth.uid()
+    )
+  );
+
+drop policy if exists "admins_can_read_attendance" on public.attendance;
+create policy "admins_can_read_attendance"
+  on public.attendance
+  for select
+  to authenticated
+  using (
+    exists (
+      select 1 from public.users u
+      where u.id = auth.uid() and u.role = 'admin'
     )
   );
 

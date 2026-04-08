@@ -21,6 +21,19 @@ type MemberClass = CommunityClass & {
   isRegistered: boolean;
 };
 
+type Student = {
+  id: string;
+  email: string;
+};
+
+type AttendanceStatus = "present" | "absent" | "late";
+
+type AttendanceRecord = {
+  member_id: string;
+  session_date: string;
+  status: AttendanceStatus;
+};
+
 type AuthResponse = {
   error?: string;
   message?: string;
@@ -109,6 +122,15 @@ export default function App() {
   const [editStartsAt, setEditStartsAt] = useState("");
   const [editCapacity, setEditCapacity] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+
+  // Attendance state
+  const [attendanceClassId, setAttendanceClassId] = useState<string | null>(null);
+  const [attendanceClassName, setAttendanceClassName] = useState("");
+  const [attendanceDate, setAttendanceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [attendanceStudents, setAttendanceStudents] = useState<Student[]>([]);
+  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
 
   const [groqMessage, setGroqMessage] = useState("");
   const [groqReply, setGroqReply] = useState("");
@@ -439,6 +461,93 @@ export default function App() {
     }
   }
 
+  async function handleStartAttendance(item: CommunityClass) {
+    if (!accessToken) return;
+    setAttendanceClassId(item.id);
+    setAttendanceClassName(item.title);
+    setAttendanceLoading(true);
+    setStatus("");
+    try {
+      const [studentsRes, attendanceRes] = await Promise.all([
+        fetch(apiUrl(`/api/teacher/classes/${item.id}/students`), {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        }),
+        fetch(apiUrl(`/api/teacher/classes/${item.id}/attendance?date=${attendanceDate}`), {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        })
+      ]);
+
+      const students = await parseApiJson<Student[] | AuthResponse>(studentsRes);
+      if (!studentsRes.ok) throw new Error((students as AuthResponse).error ?? "Could not load students.");
+
+      const records = await parseApiJson<AttendanceRecord[] | AuthResponse>(attendanceRes);
+      if (!attendanceRes.ok) throw new Error((records as AuthResponse).error ?? "Could not load attendance.");
+
+      const studentList = students as Student[];
+      setAttendanceStudents(studentList);
+
+      const map: Record<string, AttendanceStatus> = {};
+      for (const s of studentList) map[s.id] = "present";
+      for (const r of records as AttendanceRecord[]) map[r.member_id] = r.status;
+      setAttendanceMap(map);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load attendance data.");
+      setAttendanceClassId(null);
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }
+
+  async function handleLoadAttendanceDate() {
+    if (!accessToken || !attendanceClassId) return;
+    setAttendanceLoading(true);
+    setStatus("");
+    try {
+      const response = await fetch(
+        apiUrl(`/api/teacher/classes/${attendanceClassId}/attendance?date=${attendanceDate}`),
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      const records = await parseApiJson<AttendanceRecord[] | AuthResponse>(response);
+      if (!response.ok) throw new Error((records as AuthResponse).error ?? "Could not load attendance.");
+
+      const map: Record<string, AttendanceStatus> = {};
+      for (const s of attendanceStudents) map[s.id] = "present";
+      for (const r of records as AttendanceRecord[]) map[r.member_id] = r.status;
+      setAttendanceMap(map);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load attendance.");
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }
+
+  async function handleSubmitAttendance() {
+    if (!accessToken || !attendanceClassId) return;
+    setAttendanceSaving(true);
+    setStatus("");
+    try {
+      const records = attendanceStudents.map((s) => ({
+        memberId: s.id,
+        status: attendanceMap[s.id] ?? "present"
+      }));
+      const response = await fetch(apiUrl(`/api/teacher/classes/${attendanceClassId}/attendance`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ date: attendanceDate, records })
+      });
+      const data = await parseApiJson<AuthResponse>(response);
+      if (!response.ok) {
+        setStatus(data.error ?? "Could not save attendance.");
+        return;
+      }
+      setStatus("Attendance saved.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save attendance.");
+    } finally {
+      setAttendanceSaving(false);
+    }
+  }
+
   async function handleGroqChat(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!accessToken) return;
@@ -479,6 +588,9 @@ export default function App() {
     setTeacherClasses([]);
     setUsers([]);
     setTeachers([]);
+    setAttendanceClassId(null);
+    setAttendanceStudents([]);
+    setAttendanceMap({});
     setStatus("Logged out.");
   }
 
@@ -672,94 +784,174 @@ export default function App() {
           </>
 
         ) : currentRole === "teacher" ? (
-          <section className="stack">
-            <h2>My Assigned Classes</h2>
-            {classesLoading ? (
-              <p>Loading classes...</p>
-            ) : teacherClasses.length === 0 ? (
-              <p>No classes assigned to you yet.</p>
-            ) : (
-              <ul className="class-list">
-                {teacherClasses.map((item) => (
-                  <li key={item.id} className="class-card">
-                    {editingClassId === item.id ? (
-                      <form onSubmit={handleEditClass} className="stack">
-                        <h3>Edit Class</h3>
-                        <input
-                          type="text"
-                          placeholder="Class title"
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          required
-                        />
-                        <textarea
-                          placeholder="Class description"
-                          value={editDescription}
-                          onChange={(e) => setEditDescription(e.target.value)}
-                          rows={4}
-                          required
-                        />
-                        <input
-                          type="text"
-                          placeholder="Instructor name"
-                          value={editInstructorName}
-                          onChange={(e) => setEditInstructorName(e.target.value)}
-                          required
-                        />
-                        <input
-                          type="text"
-                          placeholder="Location"
-                          value={editLocation}
-                          onChange={(e) => setEditLocation(e.target.value)}
-                          required
-                        />
-                        <div className="split">
+          <>
+            <section className="stack">
+              <h2>My Assigned Classes</h2>
+              {classesLoading ? (
+                <p>Loading classes...</p>
+              ) : teacherClasses.length === 0 ? (
+                <p>No classes assigned to you yet.</p>
+              ) : (
+                <ul className="class-list">
+                  {teacherClasses.map((item) => (
+                    <li key={item.id} className="class-card">
+                      {editingClassId === item.id ? (
+                        <form onSubmit={handleEditClass} className="stack">
+                          <h3>Edit Class</h3>
                           <input
-                            type="datetime-local"
-                            value={editStartsAt}
-                            onChange={(e) => setEditStartsAt(e.target.value)}
+                            type="text"
+                            placeholder="Class title"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            required
+                          />
+                          <textarea
+                            placeholder="Class description"
+                            value={editDescription}
+                            onChange={(e) => setEditDescription(e.target.value)}
+                            rows={4}
                             required
                           />
                           <input
-                            type="number"
-                            min={1}
-                            max={1000}
-                            value={editCapacity}
-                            onChange={(e) => setEditCapacity(e.target.value)}
+                            type="text"
+                            placeholder="Instructor name"
+                            value={editInstructorName}
+                            onChange={(e) => setEditInstructorName(e.target.value)}
                             required
                           />
-                        </div>
-                        <div className="split">
-                          <button type="submit" disabled={editLoading}>
-                            {editLoading ? "Saving..." : "Save Changes"}
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => setEditingClassId(null)}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </form>
-                    ) : (
-                      <>
-                        <h3>{item.title}</h3>
-                        <p>{item.description}</p>
-                        <p><strong>Instructor:</strong> {item.instructor_name}</p>
-                        <p><strong>Location:</strong> {item.location}</p>
-                        <p><strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}</p>
-                        <p><strong>Capacity:</strong> {item.capacity}</p>
-                        <button type="button" onClick={() => startEditClass(item)}>
-                          Edit Class
-                        </button>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                          <input
+                            type="text"
+                            placeholder="Location"
+                            value={editLocation}
+                            onChange={(e) => setEditLocation(e.target.value)}
+                            required
+                          />
+                          <div className="split">
+                            <input
+                              type="datetime-local"
+                              value={editStartsAt}
+                              onChange={(e) => setEditStartsAt(e.target.value)}
+                              required
+                            />
+                            <input
+                              type="number"
+                              min={1}
+                              max={1000}
+                              value={editCapacity}
+                              onChange={(e) => setEditCapacity(e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div className="split">
+                            <button type="submit" disabled={editLoading}>
+                              {editLoading ? "Saving..." : "Save Changes"}
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => setEditingClassId(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <>
+                          <h3>{item.title}</h3>
+                          <p>{item.description}</p>
+                          <p><strong>Instructor:</strong> {item.instructor_name}</p>
+                          <p><strong>Location:</strong> {item.location}</p>
+                          <p><strong>Starts:</strong> {new Date(item.starts_at).toLocaleString()}</p>
+                          <p><strong>Capacity:</strong> {item.capacity}</p>
+                          <div className="split">
+                            <button type="button" onClick={() => startEditClass(item)}>
+                              Edit Class
+                            </button>
+                            <button
+                              type="button"
+                              className={attendanceClassId === item.id ? "active" : "ghost"}
+                              onClick={() => {
+                                if (attendanceClassId === item.id) {
+                                  setAttendanceClassId(null);
+                                } else {
+                                  setEditingClassId(null);
+                                  handleStartAttendance(item);
+                                }
+                              }}
+                            >
+                              {attendanceClassId === item.id ? "Close Attendance" : "Take Attendance"}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {attendanceClassId && (
+              <section className="stack">
+                <div className="panel-header">
+                  <h2>Attendance: {attendanceClassName}</h2>
+                  <button type="button" className="ghost" onClick={() => setAttendanceClassId(null)}>
+                    Close
+                  </button>
+                </div>
+                <div className="split">
+                  <input
+                    type="date"
+                    value={attendanceDate}
+                    onChange={(e) => setAttendanceDate(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={handleLoadAttendanceDate}
+                    disabled={attendanceLoading}
+                  >
+                    {attendanceLoading ? "Loading..." : "Load Date"}
+                  </button>
+                </div>
+                {attendanceLoading ? (
+                  <p>Loading students...</p>
+                ) : attendanceStudents.length === 0 ? (
+                  <p>No students are enrolled in this class yet.</p>
+                ) : (
+                  <>
+                    <ul className="attendance-list">
+                      {attendanceStudents.map((student) => (
+                        <li key={student.id} className="attendance-row">
+                          <span>{student.email}</span>
+                          <div className="toggle-row">
+                            {(["present", "late", "absent"] as AttendanceStatus[]).map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                className={attendanceMap[student.id] === s ? `status-${s}` : "ghost"}
+                                onClick={() =>
+                                  setAttendanceMap((prev) => ({ ...prev, [student.id]: s }))
+                                }
+                              >
+                                {s.charAt(0).toUpperCase() + s.slice(1)}
+                              </button>
+                            ))}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={handleSubmitAttendance}
+                      disabled={attendanceSaving}
+                    >
+                      {attendanceSaving ? "Saving..." : "Save Attendance"}
+                    </button>
+                  </>
+                )}
+              </section>
             )}
-          </section>
+          </>
 
         ) : (
           <section className="stack">
