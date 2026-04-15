@@ -878,6 +878,98 @@ app.post("/api/teacher/classes/:classId/attendance", async (request, response) =
   response.json({ message: "Attendance saved." } satisfies AuthResponse);
 });
 
+const checkinToggleSchema = z.object({
+  memberId: z.string().uuid(),
+  checkedIn: z.boolean()
+});
+
+// Admin: get students with today's check-in status for a class
+app.get("/api/admin/classes/:classId/checkin", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { data: registrations, error: regError } = await dbClient
+    .from("class_registrations")
+    .select("member_id")
+    .eq("class_id", classId);
+
+  if (regError) {
+    response.status(500).json({ error: regError.message });
+    return;
+  }
+
+  if (!registrations || registrations.length === 0) {
+    response.json([]);
+    return;
+  }
+
+  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
+  if (authError) {
+    response.status(500).json({ error: authError.message });
+    return;
+  }
+  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+
+  const { data: attendance, error: attError } = await dbClient
+    .from("attendance")
+    .select("member_id, status")
+    .eq("class_id", classId)
+    .eq("session_date", today);
+
+  if (attError) {
+    response.status(500).json({ error: attError.message });
+    return;
+  }
+
+  const statusMap = new Map((attendance ?? []).map((r) => [r.member_id, r.status]));
+
+  const result = registrations.map((r: { member_id: string }) => ({
+    id: r.member_id,
+    email: emailMap.get(r.member_id) ?? r.member_id,
+    checkedIn: statusMap.get(r.member_id) === "present"
+  }));
+
+  response.json(result);
+});
+
+// Admin: toggle check-in for a student (upserts attendance for today)
+app.post("/api/admin/classes/:classId/checkin", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const parsed = checkinToggleSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "Invalid check-in payload." });
+    return;
+  }
+
+  const { error } = await dbClient
+    .from("attendance")
+    .upsert(
+      {
+        class_id: classId,
+        member_id: parsed.data.memberId,
+        session_date: today,
+        status: parsed.data.checkedIn ? "present" : "absent",
+        marked_by: user.id
+      },
+      { onConflict: "class_id,member_id,session_date" }
+    );
+
+  if (error) {
+    response.status(500).json({ error: error.message });
+    return;
+  }
+
+  response.json({ message: "Check-in updated." });
+});
+
 const groqChatSchema = z.object({
   message: z.string().min(1).max(2000)
 });

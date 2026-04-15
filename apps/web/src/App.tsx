@@ -52,6 +52,12 @@ type Teacher = {
   email: string;
 };
 
+type CheckinStudent = {
+  id: string;
+  email: string;
+  checkedIn: boolean;
+};
+
 const envApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim();
 const apiBaseUrl = (envApiBaseUrl || "http://localhost:4000").replace(/\/$/, "");
 
@@ -127,6 +133,12 @@ export default function App() {
   const [editStartsAt, setEditStartsAt] = useState("");
   const [editCapacity, setEditCapacity] = useState("");
   const [editLoading, setEditLoading] = useState(false);
+
+  // Admin check-in state
+  const [managingClassId, setManagingClassId] = useState<string | null>(null);
+  const [checkinStudents, setCheckinStudents] = useState<CheckinStudent[]>([]);
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const [togglingStudentId, setTogglingStudentId] = useState<string | null>(null);
 
   // Attendance state
   const [attendanceClassId, setAttendanceClassId] = useState<string | null>(null);
@@ -466,6 +478,49 @@ export default function App() {
     }
   }
 
+  async function loadCheckin(classId: string) {
+    if (!accessToken) return;
+    setCheckinLoading(true);
+    setStatus("");
+    try {
+      const response = await fetch(apiUrl(`/api/admin/classes/${classId}/checkin`), {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await parseApiJson<CheckinStudent[] | AuthResponse>(response);
+      if (!response.ok) throw new Error((data as AuthResponse).error ?? "Could not load students.");
+      setCheckinStudents(data as CheckinStudent[]);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load check-in data.");
+      setManagingClassId(null);
+    } finally {
+      setCheckinLoading(false);
+    }
+  }
+
+  async function handleToggleCheckin(classId: string, memberId: string, currentlyCheckedIn: boolean) {
+    if (!accessToken) return;
+    setTogglingStudentId(memberId);
+    try {
+      const response = await fetch(apiUrl(`/api/admin/classes/${classId}/checkin`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ memberId, checkedIn: !currentlyCheckedIn })
+      });
+      const data = await parseApiJson<AuthResponse>(response);
+      if (!response.ok) {
+        setStatus(data.error ?? "Could not update check-in.");
+        return;
+      }
+      setCheckinStudents((prev) =>
+        prev.map((s) => s.id === memberId ? { ...s, checkedIn: !currentlyCheckedIn } : s)
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not update check-in.");
+    } finally {
+      setTogglingStudentId(null);
+    }
+  }
+
   async function handleEnroll(classId: string) {
     if (!accessToken || !enrollMemberId) return;
     setEnrollLoading(true);
@@ -744,9 +799,9 @@ export default function App() {
               </button>
             </form>
 
-            {/* All Classes */}
+            {/* Manage Classes */}
             <section className="stack">
-              <h2>All Classes</h2>
+              <h2>Manage Classes</h2>
               {classesLoading ? (
                 <p>Loading classes...</p>
               ) : adminClasses.length === 0 ? (
@@ -755,6 +810,7 @@ export default function App() {
                 <ul className="class-list">
                   {adminClasses.map((item) => {
                     const assignedTeacher = teachers.find((t) => t.id === item.teacher_id);
+                    const isManaging = managingClassId === item.id;
                     return (
                       <li key={item.id} className="class-card">
                         <h3>{item.title}</h3>
@@ -766,6 +822,8 @@ export default function App() {
                         {assignedTeacher && (
                           <p><strong>Teacher:</strong> {assignedTeacher.email}</p>
                         )}
+
+                        {/* Add Student */}
                         {enrollingClassId === item.id ? (
                           <div className="stack">
                             <select
@@ -795,13 +853,62 @@ export default function App() {
                             </div>
                           </div>
                         ) : (
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => { setEnrollingClassId(item.id); setEnrollMemberId(""); }}
-                          >
-                            Add Student
-                          </button>
+                          <div className="split">
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => { setEnrollingClassId(item.id); setEnrollMemberId(""); setManagingClassId(null); }}
+                            >
+                              Add Student
+                            </button>
+                            <button
+                              type="button"
+                              className={isManaging ? "active" : "ghost"}
+                              onClick={() => {
+                                if (isManaging) {
+                                  setManagingClassId(null);
+                                } else {
+                                  setEnrollingClassId(null);
+                                  setManagingClassId(item.id);
+                                  loadCheckin(item.id);
+                                }
+                              }}
+                            >
+                              {isManaging ? "Close" : "Manage"}
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Check-in panel */}
+                        {isManaging && (
+                          <div className="stack" style={{ marginTop: "0.75rem" }}>
+                            <strong>Check-In — Today</strong>
+                            {checkinLoading ? (
+                              <p>Loading students...</p>
+                            ) : checkinStudents.length === 0 ? (
+                              <p>No students enrolled yet.</p>
+                            ) : (
+                              <ul className="attendance-list">
+                                {checkinStudents.map((s) => (
+                                  <li key={s.id} className="attendance-row">
+                                    <span>{s.email}</span>
+                                    <button
+                                      type="button"
+                                      className={s.checkedIn ? "status-present" : "ghost"}
+                                      disabled={togglingStudentId === s.id}
+                                      onClick={() => handleToggleCheckin(item.id, s.id, s.checkedIn)}
+                                    >
+                                      {togglingStudentId === s.id
+                                        ? "..."
+                                        : s.checkedIn
+                                          ? "Checked In"
+                                          : "Check In"}
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
                         )}
                       </li>
                     );

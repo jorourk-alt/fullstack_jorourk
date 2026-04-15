@@ -268,3 +268,96 @@ begin
     );
   end if;
 end $$;
+
+-- Seed fake skating students
+do $$
+declare
+  beginner_id   uuid;
+  intermediate_id uuid;
+  advanced_id   uuid;
+  student_ids   uuid[] := array[
+    'a0000001-0000-0000-0000-000000000001'::uuid,
+    'a0000001-0000-0000-0000-000000000002'::uuid,
+    'a0000001-0000-0000-0000-000000000003'::uuid,
+    'a0000001-0000-0000-0000-000000000004'::uuid,
+    'a0000001-0000-0000-0000-000000000005'::uuid,
+    'a0000001-0000-0000-0000-000000000006'::uuid,
+    'a0000001-0000-0000-0000-000000000007'::uuid,
+    'a0000001-0000-0000-0000-000000000008'::uuid,
+    'a0000001-0000-0000-0000-000000000009'::uuid,
+    'a0000001-0000-0000-0000-000000000010'::uuid
+  ];
+  student_emails text[] := array[
+    'alex.turner@skate.test',
+    'jordan.lee@skate.test',
+    'sam.parker@skate.test',
+    'riley.chen@skate.test',
+    'casey.morgan@skate.test',
+    'taylor.brooks@skate.test',
+    'drew.williams@skate.test',
+    'quinn.davis@skate.test',
+    'avery.johnson@skate.test',
+    'morgan.smith@skate.test'
+  ];
+  i integer;
+begin
+  -- Insert fake auth users
+  for i in 1..10 loop
+    begin
+      insert into auth.users (
+        instance_id, id, aud, role, email, encrypted_password,
+        email_confirmed_at, created_at, updated_at,
+        raw_app_meta_data, raw_user_meta_data, is_super_admin, is_sso_user
+      ) values (
+        '00000000-0000-0000-0000-000000000000',
+        student_ids[i],
+        'authenticated', 'authenticated',
+        student_emails[i],
+        crypt('SkatePass1!', gen_salt('bf')),
+        now(), now(), now(),
+        '{"provider":"email","providers":["email"]}', '{}',
+        false, false
+      );
+    exception when others then null;
+    end;
+  end loop;
+
+  -- Insert into public.users as member
+  for i in 1..10 loop
+    insert into public.users (id, role)
+    values (student_ids[i], 'member')
+    on conflict (id) do nothing;
+  end loop;
+
+  -- Get class IDs
+  select id into beginner_id     from public.community_classes where title = 'Beginner Skating'     limit 1;
+  select id into intermediate_id from public.community_classes where title = 'Intermediate Skating' limit 1;
+  select id into advanced_id     from public.community_classes where title = 'Advanced Skating'     limit 1;
+
+  -- Enroll all 10 into Beginner
+  if beginner_id is not null then
+    for i in 1..10 loop
+      insert into public.class_registrations (class_id, member_id)
+      values (beginner_id, student_ids[i])
+      on conflict (class_id, member_id) do nothing;
+    end loop;
+  end if;
+
+  -- Enroll first 6 into Intermediate
+  if intermediate_id is not null then
+    for i in 1..6 loop
+      insert into public.class_registrations (class_id, member_id)
+      values (intermediate_id, student_ids[i])
+      on conflict (class_id, member_id) do nothing;
+    end loop;
+  end if;
+
+  -- Enroll first 4 into Advanced
+  if advanced_id is not null then
+    for i in 1..4 loop
+      insert into public.class_registrations (class_id, member_id)
+      values (advanced_id, student_ids[i])
+      on conflict (class_id, member_id) do nothing;
+    end loop;
+  end if;
+end $$;
