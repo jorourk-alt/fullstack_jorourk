@@ -159,6 +159,19 @@ function readBearerToken(request: Request) {
   return token;
 }
 
+async function fetchAllAuthUsers() {
+  const allUsers: { id: string; email?: string }[] = [];
+  let page = 1;
+  while (true) {
+    const { data, error } = await dbClient.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error || !data) break;
+    allUsers.push(...data.users);
+    if (data.users.length < 1000) break;
+    page++;
+  }
+  return allUsers;
+}
+
 async function fetchUserRole(userId: string): Promise<UserRole | null> {
   const { data, error } = await dbClient
     .from("users")
@@ -323,14 +336,8 @@ app.get("/api/admin/users", async (request, response) => {
     return;
   }
 
-  // Fetch emails from auth
-  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
-  if (authError) {
-    response.status(500).json({ error: authError.message });
-    return;
-  }
-
-  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+  const authUsers = await fetchAllAuthUsers();
+  const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
   const result = (data ?? []).map((row: UserRecord) => ({
     id: row.id,
@@ -382,13 +389,8 @@ app.get("/api/admin/teachers", async (request, response) => {
     return;
   }
 
-  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
-  if (authError) {
-    response.status(500).json({ error: authError.message });
-    return;
-  }
-
-  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+  const authUsers = await fetchAllAuthUsers();
+  const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
   const result = (data ?? []).map((row: UserRecord) => ({
     id: row.id,
@@ -764,13 +766,8 @@ app.get("/api/teacher/classes/:classId/students", async (request, response) => {
     return;
   }
 
-  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
-  if (authError) {
-    response.status(500).json({ error: authError.message });
-    return;
-  }
-
-  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+  const authUsers = await fetchAllAuthUsers();
+  const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
   const result = registrations.map((r: { member_id: string }) => ({
     id: r.member_id,
@@ -906,12 +903,8 @@ app.get("/api/admin/classes/:classId/checkin", async (request, response) => {
     return;
   }
 
-  const { data: authList, error: authError } = await dbClient.auth.admin.listUsers();
-  if (authError) {
-    response.status(500).json({ error: authError.message });
-    return;
-  }
-  const emailMap = new Map(authList.users.map((u) => [u.id, u.email ?? ""]));
+  const authUsers = await fetchAllAuthUsers();
+  const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
   const { data: attendance, error: attError } = await dbClient
     .from("attendance")
@@ -1060,7 +1053,8 @@ app.post("/api/admin/seed-students", async (request, response) => {
     });
 
     if (error) {
-      if (error.message.toLowerCase().includes("already been registered") || error.status === 422) {
+      const msg = error.message.toLowerCase();
+      if (msg.includes("already") || msg.includes("registered") || msg.includes("exists") || error.status === 422) {
         skipped.push(student.email);
       } else {
         failed.push(student.email);
