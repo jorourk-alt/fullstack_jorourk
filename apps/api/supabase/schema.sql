@@ -182,6 +182,14 @@ begin
     return;
   end if;
 
+  -- Remove non-skating classes
+  delete from public.community_classes
+  where title in (
+    'Neighborhood Pottery Basics',
+    'Urban Garden 101',
+    'Conversational Spanish for Travelers'
+  );
+
   if not exists (
     select 1
     from public.community_classes

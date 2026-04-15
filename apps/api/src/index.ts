@@ -96,6 +96,10 @@ const registerSchema = z.object({
   classId: z.string().uuid()
 });
 
+const adminEnrollSchema = z.object({
+  memberId: z.string().uuid()
+});
+
 const attendanceSubmitSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
   records: z
@@ -452,6 +456,64 @@ app.post("/api/admin/classes", async (request, response) => {
   }
 
   response.status(201).json(data);
+});
+
+// Admin: enroll a member into a class
+app.post("/api/admin/classes/:classId/enrollments", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const { classId } = request.params;
+
+  const parsed = adminEnrollSchema.safeParse(request.body);
+  if (!parsed.success) {
+    response.status(400).json({ error: "memberId must be a valid UUID." });
+    return;
+  }
+
+  const { data: classRecord, error: classError } = await dbClient
+    .from("community_classes")
+    .select("id, capacity")
+    .eq("id", classId)
+    .maybeSingle();
+
+  if (classError) {
+    response.status(500).json({ error: classError.message });
+    return;
+  }
+  if (!classRecord) {
+    response.status(404).json({ error: "Class not found." });
+    return;
+  }
+
+  const { count, error: countError } = await dbClient
+    .from("class_registrations")
+    .select("id", { count: "exact", head: true })
+    .eq("class_id", classId);
+
+  if (countError) {
+    response.status(500).json({ error: countError.message });
+    return;
+  }
+  if ((count ?? 0) >= classRecord.capacity) {
+    response.status(409).json({ error: "This class is full." });
+    return;
+  }
+
+  const { error: insertError } = await dbClient
+    .from("class_registrations")
+    .insert({ class_id: classId, member_id: parsed.data.memberId });
+
+  if (insertError) {
+    if (insertError.code === "23505") {
+      response.status(409).json({ error: "Student is already enrolled in this class." });
+      return;
+    }
+    response.status(500).json({ error: insertError.message });
+    return;
+  }
+
+  response.status(201).json({ message: "Student enrolled." });
 });
 
 app.get("/api/member/classes", async (request, response) => {

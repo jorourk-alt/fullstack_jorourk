@@ -113,6 +113,11 @@ export default function App() {
 
   const [registeringClassId, setRegisteringClassId] = useState<string | null>(null);
 
+  // Admin enroll state
+  const [enrollingClassId, setEnrollingClassId] = useState<string | null>(null);
+  const [enrollMemberId, setEnrollMemberId] = useState("");
+  const [enrollLoading, setEnrollLoading] = useState(false);
+
   // Teacher edit state
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -461,6 +466,32 @@ export default function App() {
     }
   }
 
+  async function handleEnroll(classId: string) {
+    if (!accessToken || !enrollMemberId) return;
+    setEnrollLoading(true);
+    setStatus("");
+    try {
+      const response = await fetch(apiUrl(`/api/admin/classes/${classId}/enrollments`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ memberId: enrollMemberId })
+      });
+      const data = await parseApiJson<AuthResponse>(response);
+      if (!response.ok) {
+        setStatus(data.error ?? "Enrollment failed.");
+        return;
+      }
+      setStatus(data.message ?? "Student enrolled.");
+      setEnrollingClassId(null);
+      setEnrollMemberId("");
+      await loadAdminClasses(accessToken);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not enroll student.");
+    } finally {
+      setEnrollLoading(false);
+    }
+  }
+
   async function handleStartAttendance(item: CommunityClass) {
     if (!accessToken) return;
     setAttendanceClassId(item.id);
@@ -734,6 +765,43 @@ export default function App() {
                         <p><strong>Capacity:</strong> {item.capacity}</p>
                         {assignedTeacher && (
                           <p><strong>Teacher:</strong> {assignedTeacher.email}</p>
+                        )}
+                        {enrollingClassId === item.id ? (
+                          <div className="stack">
+                            <select
+                              value={enrollMemberId}
+                              onChange={(e) => setEnrollMemberId(e.target.value)}
+                            >
+                              <option value="">— Select a member —</option>
+                              {users.filter((u) => u.role === "member").map((u) => (
+                                <option key={u.id} value={u.id}>{u.email}</option>
+                              ))}
+                            </select>
+                            <div className="split">
+                              <button
+                                type="button"
+                                disabled={enrollLoading || !enrollMemberId}
+                                onClick={() => handleEnroll(item.id)}
+                              >
+                                {enrollLoading ? "Enrolling..." : "Enroll"}
+                              </button>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => { setEnrollingClassId(null); setEnrollMemberId(""); }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => { setEnrollingClassId(item.id); setEnrollMemberId(""); }}
+                          >
+                            Add Student
+                          </button>
                         )}
                       </li>
                     );
