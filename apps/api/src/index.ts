@@ -1010,6 +1010,75 @@ app.post("/api/groq/chat", async (request, response) => {
   }
 });
 
+const SEED_STUDENTS = [
+  { email: "alex.turner@skate.test",    name: "Alex Turner" },
+  { email: "jordan.lee@skate.test",     name: "Jordan Lee" },
+  { email: "sam.parker@skate.test",     name: "Sam Parker" },
+  { email: "riley.chen@skate.test",     name: "Riley Chen" },
+  { email: "casey.morgan@skate.test",   name: "Casey Morgan" },
+  { email: "taylor.brooks@skate.test",  name: "Taylor Brooks" },
+  { email: "drew.williams@skate.test",  name: "Drew Williams" },
+  { email: "quinn.davis@skate.test",    name: "Quinn Davis" },
+  { email: "avery.johnson@skate.test",  name: "Avery Johnson" },
+  { email: "morgan.smith@skate.test",   name: "Morgan Smith" },
+  { email: "blake.harris@skate.test",   name: "Blake Harris" },
+  { email: "charlie.nguyen@skate.test", name: "Charlie Nguyen" },
+  { email: "dana.kim@skate.test",       name: "Dana Kim" },
+  { email: "elliot.foster@skate.test",  name: "Elliot Foster" },
+  { email: "fiona.reed@skate.test",     name: "Fiona Reed" },
+  { email: "gabriel.stone@skate.test",  name: "Gabriel Stone" },
+  { email: "hailey.cross@skate.test",   name: "Hailey Cross" },
+  { email: "ivan.bell@skate.test",      name: "Ivan Bell" },
+  { email: "jade.warren@skate.test",    name: "Jade Warren" },
+  { email: "kai.murphy@skate.test",     name: "Kai Murphy" },
+  { email: "lena.price@skate.test",     name: "Lena Price" },
+  { email: "marcus.cole@skate.test",    name: "Marcus Cole" },
+  { email: "nadia.hunt@skate.test",     name: "Nadia Hunt" },
+  { email: "oliver.shaw@skate.test",    name: "Oliver Shaw" },
+  { email: "paige.woods@skate.test",    name: "Paige Woods" },
+  { email: "rex.grant@skate.test",      name: "Rex Grant" },
+  { email: "sofia.lane@skate.test",     name: "Sofia Lane" },
+  { email: "theo.banks@skate.test",     name: "Theo Banks" },
+  { email: "uma.hayes@skate.test",      name: "Uma Hayes" },
+  { email: "victor.ross@skate.test",    name: "Victor Ross" }
+];
+
+// Admin: seed test students via Supabase admin API
+app.post("/api/admin/seed-students", async (request, response) => {
+  const user = await requireUser(request, response, ["admin"]);
+  if (!user) return;
+
+  const created: string[] = [];
+  const skipped: string[] = [];
+  const failed: string[] = [];
+
+  for (const student of SEED_STUDENTS) {
+    const { data, error } = await dbClient.auth.admin.createUser({
+      email: student.email,
+      password: "SkatePass1!",
+      email_confirm: true
+    });
+
+    if (error) {
+      if (error.message.toLowerCase().includes("already been registered") || error.status === 422) {
+        skipped.push(student.email);
+      } else {
+        failed.push(student.email);
+      }
+      continue;
+    }
+
+    const upsertError = await upsertUserRole(data.user.id, "member");
+    if (upsertError) {
+      failed.push(student.email);
+    } else {
+      created.push(student.email);
+    }
+  }
+
+  response.json({ created, skipped, failed });
+});
+
 app.listen(port, () => {
   console.log(`API listening on port ${port}`);
 });

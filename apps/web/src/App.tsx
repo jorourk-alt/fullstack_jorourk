@@ -124,6 +124,8 @@ export default function App() {
   const [enrollMemberId, setEnrollMemberId] = useState("");
   const [enrollLoading, setEnrollLoading] = useState(false);
 
+  const [seedLoading, setSeedLoading] = useState(false);
+
   // Teacher edit state
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -521,6 +523,30 @@ export default function App() {
     }
   }
 
+  async function handleSeedStudents() {
+    if (!accessToken) return;
+    setSeedLoading(true);
+    setStatus("");
+    try {
+      const response = await fetch(apiUrl("/api/admin/seed-students"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      const data = await parseApiJson<{ created: string[]; skipped: string[]; failed: string[] } | AuthResponse>(response);
+      if (!response.ok) {
+        setStatus((data as AuthResponse).error ?? "Seeding failed.");
+        return;
+      }
+      const { created, skipped } = data as { created: string[]; skipped: string[]; failed: string[] };
+      setStatus(`Seeded ${created.length} new students. ${skipped.length} already existed.`);
+      await loadUsers(accessToken);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not seed students.");
+    } finally {
+      setSeedLoading(false);
+    }
+  }
+
   async function handleEnroll(classId: string) {
     if (!accessToken || !enrollMemberId) return;
     setEnrollLoading(true);
@@ -801,7 +827,12 @@ export default function App() {
 
             {/* Manage Classes */}
             <section className="stack">
-              <h2>Manage Classes</h2>
+              <div className="panel-header">
+                <h2>Manage Classes</h2>
+                <button type="button" className="ghost" disabled={seedLoading} onClick={handleSeedStudents}>
+                  {seedLoading ? "Seeding..." : "Seed Test Students"}
+                </button>
+              </div>
               {classesLoading ? (
                 <p>Loading classes...</p>
               ) : adminClasses.length === 0 ? (
