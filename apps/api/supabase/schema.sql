@@ -361,3 +361,79 @@ begin
     end loop;
   end if;
 end $$;
+
+-- Seed additional unenrolled students (available to add to classes)
+do $$
+declare
+  extra_ids uuid[] := array[
+    'b0000002-0000-0000-0000-000000000001'::uuid,
+    'b0000002-0000-0000-0000-000000000002'::uuid,
+    'b0000002-0000-0000-0000-000000000003'::uuid,
+    'b0000002-0000-0000-0000-000000000004'::uuid,
+    'b0000002-0000-0000-0000-000000000005'::uuid,
+    'b0000002-0000-0000-0000-000000000006'::uuid,
+    'b0000002-0000-0000-0000-000000000007'::uuid,
+    'b0000002-0000-0000-0000-000000000008'::uuid,
+    'b0000002-0000-0000-0000-000000000009'::uuid,
+    'b0000002-0000-0000-0000-000000000010'::uuid,
+    'b0000002-0000-0000-0000-000000000011'::uuid,
+    'b0000002-0000-0000-0000-000000000012'::uuid,
+    'b0000002-0000-0000-0000-000000000013'::uuid,
+    'b0000002-0000-0000-0000-000000000014'::uuid,
+    'b0000002-0000-0000-0000-000000000015'::uuid,
+    'b0000002-0000-0000-0000-000000000016'::uuid,
+    'b0000002-0000-0000-0000-000000000017'::uuid,
+    'b0000002-0000-0000-0000-000000000018'::uuid,
+    'b0000002-0000-0000-0000-000000000019'::uuid,
+    'b0000002-0000-0000-0000-000000000020'::uuid
+  ];
+  extra_emails text[] := array[
+    'blake.harris@skate.test',
+    'charlie.nguyen@skate.test',
+    'dana.kim@skate.test',
+    'elliot.foster@skate.test',
+    'fiona.reed@skate.test',
+    'gabriel.stone@skate.test',
+    'hailey.cross@skate.test',
+    'ivan.bell@skate.test',
+    'jade.warren@skate.test',
+    'kai.murphy@skate.test',
+    'lena.price@skate.test',
+    'marcus.cole@skate.test',
+    'nadia.hunt@skate.test',
+    'oliver.shaw@skate.test',
+    'paige.woods@skate.test',
+    'rex.grant@skate.test',
+    'sofia.lane@skate.test',
+    'theo.banks@skate.test',
+    'uma.hayes@skate.test',
+    'victor.ross@skate.test'
+  ];
+  i integer;
+begin
+  for i in 1..20 loop
+    begin
+      insert into auth.users (
+        instance_id, id, aud, role, email, encrypted_password,
+        email_confirmed_at, created_at, updated_at,
+        raw_app_meta_data, raw_user_meta_data, is_super_admin, is_sso_user
+      ) values (
+        '00000000-0000-0000-0000-000000000000',
+        extra_ids[i],
+        'authenticated', 'authenticated',
+        extra_emails[i],
+        crypt('SkatePass1!', gen_salt('bf')),
+        now(), now(), now(),
+        '{"provider":"email","providers":["email"]}', '{}',
+        false, false
+      );
+    exception when others then null;
+    end;
+  end loop;
+
+  for i in 1..20 loop
+    insert into public.users (id, role)
+    values (extra_ids[i], 'member')
+    on conflict (id) do nothing;
+  end loop;
+end $$;
