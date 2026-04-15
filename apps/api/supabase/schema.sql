@@ -185,8 +185,8 @@ begin
   if not exists (
     select 1
     from public.community_classes
-    where title = 'Neighborhood Pottery Basics'
-      and starts_at = '2026-03-20T22:30:00Z'::timestamptz
+    where title = 'Beginner Skating'
+      and starts_at = '2026-04-20T18:00:00Z'::timestamptz
   ) then
     insert into public.community_classes (
       created_by,
@@ -199,11 +199,11 @@ begin
     )
     values (
       seed_user_id,
-      'Neighborhood Pottery Basics',
-      'Learn wheel and hand-building fundamentals and take home two finished pieces.',
-      'Avery Collins',
-      'Riverside Arts Studio',
-      '2026-03-20T22:30:00Z'::timestamptz,
+      'Beginner Skating',
+      'Learn the fundamentals of skating — balance, stopping, and basic forward strokes.',
+      'Jordan Mills',
+      'Riverside Ice Rink',
+      '2026-04-20T18:00:00Z'::timestamptz,
       16
     );
   end if;
@@ -211,8 +211,8 @@ begin
   if not exists (
     select 1
     from public.community_classes
-    where title = 'Urban Garden 101'
-      and starts_at = '2026-03-27T23:00:00Z'::timestamptz
+    where title = 'Intermediate Skating'
+      and starts_at = '2026-04-22T19:00:00Z'::timestamptz
   ) then
     insert into public.community_classes (
       created_by,
@@ -225,20 +225,20 @@ begin
     )
     values (
       seed_user_id,
-      'Urban Garden 101',
-      'Build a container garden plan for balconies and small yards with seasonal crop tips.',
-      'Maya Rios',
-      'Maple Community Greenhouse',
-      '2026-03-27T23:00:00Z'::timestamptz,
-      24
+      'Intermediate Skating',
+      'Build on the basics with crossovers, backwards skating, and edge work.',
+      'Sam Rivera',
+      'Riverside Ice Rink',
+      '2026-04-22T19:00:00Z'::timestamptz,
+      14
     );
   end if;
 
   if not exists (
     select 1
     from public.community_classes
-    where title = 'Conversational Spanish for Travelers'
-      and starts_at = '2026-04-02T23:30:00Z'::timestamptz
+    where title = 'Advanced Skating'
+      and starts_at = '2026-04-25T20:00:00Z'::timestamptz
   ) then
     insert into public.community_classes (
       created_by,
@@ -251,12 +251,12 @@ begin
     )
     values (
       seed_user_id,
-      'Conversational Spanish for Travelers',
-      'Practice high-use travel phrases through guided roleplay and pronunciation drills.',
-      'Diego Herrera',
-      'Eastside Library - Room B',
-      '2026-04-02T23:30:00Z'::timestamptz,
-      20
+      'Advanced Skating',
+      'Master jumps, spins, and footwork sequences for competitive or recreational advancement.',
+      'Alex Chen',
+      'Riverside Ice Rink',
+      '2026-04-25T20:00:00Z'::timestamptz,
+      10
     );
   end if;
 end $$;

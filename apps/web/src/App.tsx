@@ -137,7 +137,7 @@ export default function App() {
   const [groqLoading, setGroqLoading] = useState(false);
 
   const dashboardTitle = useMemo(() => {
-    if (!currentRole) return "Community Classes";
+    if (!currentRole) return "Skating Classes";
     return `${roleTitle(currentRole)} Dashboard`;
   }, [currentRole]);
 
@@ -600,7 +600,7 @@ export default function App() {
         <header className="panel-header">
           <div>
             <h1>{dashboardTitle}</h1>
-            <p>Local programs for neighbors, families, and lifelong learners.</p>
+            <p>Skating classes for all skill levels.</p>
           </div>
           {accessToken && (
             <button type="button" className="ghost" onClick={logout}>
