@@ -1058,6 +1058,9 @@ async function seedStudentsIfNeeded() {
     for (const row of memberRows ?? []) {
       if (!authEmailMap.get(row.id)) {
         await dbClient.auth.admin.deleteUser(row.id);
+        // Also delete directly from public.users — handles SQL-injected users
+        // that the auth admin API can't fully remove
+        await dbClient.from("users").delete().eq("id", row.id);
       }
     }
 
