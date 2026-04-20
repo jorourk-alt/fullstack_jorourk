@@ -12,8 +12,11 @@ end $$;
 create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   role public.user_role not null,
+  full_name text,
   created_at timestamptz not null default now()
 );
+
+alter table public.users add column if not exists full_name text;
 
 create table if not exists public.community_classes (
   id uuid primary key default gen_random_uuid(),
@@ -269,7 +272,9 @@ begin
   end if;
 end $$;
 
--- Seed fake skating students
+-- Students are seeded automatically by the API on startup via seedStudentsIfNeeded()
+
+-- Legacy cleanup: remove SQL-inserted fake students (replaced by API seeding)
 do $$
 declare
   beginner_id   uuid;

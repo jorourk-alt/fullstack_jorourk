@@ -143,6 +143,7 @@ type CommunityClass = {
 type UserRecord = {
   id: string;
   role: UserRole;
+  full_name?: string | null;
 };
 
 function readBearerToken(request: Request) {
@@ -328,7 +329,7 @@ app.get("/api/admin/users", async (request, response) => {
 
   const { data, error } = await dbClient
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .order("role", { ascending: true });
 
   if (error) {
@@ -342,6 +343,7 @@ app.get("/api/admin/users", async (request, response) => {
   const result = (data ?? []).map((row: UserRecord) => ({
     id: row.id,
     email: emailMap.get(row.id) ?? row.id,
+    full_name: row.full_name ?? null,
     role: row.role
   }));
 
@@ -381,7 +383,7 @@ app.get("/api/admin/teachers", async (request, response) => {
 
   const { data, error } = await dbClient
     .from("users")
-    .select("id, role")
+    .select("id, role, full_name")
     .eq("role", "teacher");
 
   if (error) {
@@ -394,7 +396,8 @@ app.get("/api/admin/teachers", async (request, response) => {
 
   const result = (data ?? []).map((row: UserRecord) => ({
     id: row.id,
-    email: emailMap.get(row.id) ?? row.id
+    email: emailMap.get(row.id) ?? row.id,
+    full_name: row.full_name ?? null
   }));
 
   response.json(result);
@@ -769,9 +772,14 @@ app.get("/api/teacher/classes/:classId/students", async (request, response) => {
   const authUsers = await fetchAllAuthUsers();
   const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
+  const memberIds = registrations.map((r: { member_id: string }) => r.member_id);
+  const { data: userRows } = await dbClient.from("users").select("id, full_name").in("id", memberIds);
+  const nameMap = new Map((userRows ?? []).map((u) => [u.id, (u as UserRecord).full_name ?? null]));
+
   const result = registrations.map((r: { member_id: string }) => ({
     id: r.member_id,
-    email: emailMap.get(r.member_id) ?? r.member_id
+    email: emailMap.get(r.member_id) ?? r.member_id,
+    full_name: nameMap.get(r.member_id) ?? null
   }));
 
   response.json(result);
@@ -906,6 +914,10 @@ app.get("/api/admin/classes/:classId/checkin", async (request, response) => {
   const authUsers = await fetchAllAuthUsers();
   const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? ""]));
 
+  const checkinMemberIds = registrations.map((r: { member_id: string }) => r.member_id);
+  const { data: checkinUserRows } = await dbClient.from("users").select("id, full_name").in("id", checkinMemberIds);
+  const checkinNameMap = new Map((checkinUserRows ?? []).map((u) => [u.id, (u as UserRecord).full_name ?? null]));
+
   const { data: attendance, error: attError } = await dbClient
     .from("attendance")
     .select("member_id, status")
@@ -922,6 +934,7 @@ app.get("/api/admin/classes/:classId/checkin", async (request, response) => {
   const result = registrations.map((r: { member_id: string }) => ({
     id: r.member_id,
     email: emailMap.get(r.member_id) ?? r.member_id,
+    full_name: checkinNameMap.get(r.member_id) ?? null,
     checkedIn: statusMap.get(r.member_id) === "present"
   }));
 
@@ -1036,53 +1049,51 @@ const SEED_STUDENTS = [
   { email: "victor.ross@skate.test",    name: "Victor Ross" }
 ];
 
-// Admin: seed test students via Supabase admin API
-app.post("/api/admin/seed-students", async (request, response) => {
-  const user = await requireUser(request, response, ["admin"]);
-  if (!user) return;
-
-  // Delete any SQL-seeded members that have no email in auth (show as raw UUIDs)
-  const allAuthUsers = await fetchAllAuthUsers();
-  const authEmailMap = new Map(allAuthUsers.map((u) => [u.id, u.email ?? ""]));
-  const { data: memberRows } = await dbClient.from("users").select("id").eq("role", "member");
-  for (const row of memberRows ?? []) {
-    if (!authEmailMap.get(row.id)) {
-      await dbClient.auth.admin.deleteUser(row.id);
-    }
-  }
-
-  const created: string[] = [];
-  const skipped: string[] = [];
-  const failed: string[] = [];
-
-  for (const student of SEED_STUDENTS) {
-    const { data, error } = await dbClient.auth.admin.createUser({
-      email: student.email,
-      password: "SkatePass1!",
-      email_confirm: true
-    });
-
-    if (error) {
-      const msg = error.message.toLowerCase();
-      if (msg.includes("already") || msg.includes("registered") || msg.includes("exists") || error.status === 422) {
-        skipped.push(student.email);
-      } else {
-        failed.push(student.email);
+async function seedStudentsIfNeeded() {
+  try {
+    // Delete SQL-seeded members with no auth email (show as raw UUIDs)
+    const allAuthUsers = await fetchAllAuthUsers();
+    const authEmailMap = new Map(allAuthUsers.map((u) => [u.id, u.email ?? ""]));
+    const { data: memberRows } = await dbClient.from("users").select("id").eq("role", "member");
+    for (const row of memberRows ?? []) {
+      if (!authEmailMap.get(row.id)) {
+        await dbClient.auth.admin.deleteUser(row.id);
       }
-      continue;
     }
 
-    const upsertError = await upsertUserRole(data.user.id, "member");
-    if (upsertError) {
-      failed.push(student.email);
-    } else {
-      created.push(student.email);
+    const refreshed = await fetchAllAuthUsers();
+    const existingEmails = new Map(refreshed.map((u) => [u.email?.toLowerCase() ?? "", u.id]));
+
+    for (const student of SEED_STUDENTS) {
+      const existingId = existingEmails.get(student.email.toLowerCase());
+      if (existingId) {
+        // Backfill full_name if missing
+        await dbClient
+          .from("users")
+          .update({ full_name: student.name })
+          .eq("id", existingId)
+          .is("full_name", null);
+        continue;
+      }
+
+      const { data, error } = await dbClient.auth.admin.createUser({
+        email: student.email,
+        password: "SkatePass1!",
+        email_confirm: true
+      });
+      if (error || !data) continue;
+
+      await dbClient
+        .from("users")
+        .upsert({ id: data.user.id, role: "member", full_name: student.name }, { onConflict: "id" });
     }
+    console.log("Student seed complete.");
+  } catch (err) {
+    console.error("Seed error:", err);
   }
-
-  response.json({ created, skipped, failed });
-});
+}
 
 app.listen(port, () => {
   console.log(`API listening on port ${port}`);
+  seedStudentsIfNeeded();
 });

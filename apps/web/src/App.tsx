@@ -24,6 +24,7 @@ type MemberClass = CommunityClass & {
 type Student = {
   id: string;
   email: string;
+  full_name?: string | null;
 };
 
 type AttendanceStatus = "present" | "absent" | "late";
@@ -44,19 +45,26 @@ type AuthResponse = {
 type UserRecord = {
   id: string;
   email: string;
+  full_name?: string | null;
   role: UserRole;
 };
 
 type Teacher = {
   id: string;
   email: string;
+  full_name?: string | null;
 };
 
 type CheckinStudent = {
   id: string;
   email: string;
+  full_name?: string | null;
   checkedIn: boolean;
 };
+
+function displayName(u: { email: string; full_name?: string | null }) {
+  return u.full_name || u.email;
+}
 
 const envApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim();
 const apiBaseUrl = (envApiBaseUrl || "http://localhost:4000").replace(/\/$/, "");
@@ -124,7 +132,6 @@ export default function App() {
   const [enrollMemberId, setEnrollMemberId] = useState("");
   const [enrollLoading, setEnrollLoading] = useState(false);
 
-  const [seedLoading, setSeedLoading] = useState(false);
 
   // Teacher edit state
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
@@ -523,29 +530,6 @@ export default function App() {
     }
   }
 
-  async function handleSeedStudents() {
-    if (!accessToken) return;
-    setSeedLoading(true);
-    setStatus("");
-    try {
-      const response = await fetch(apiUrl("/api/admin/seed-students"), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
-      const data = await parseApiJson<{ created: string[]; skipped: string[]; failed: string[] } | AuthResponse>(response);
-      if (!response.ok) {
-        setStatus((data as AuthResponse).error ?? "Seeding failed.");
-        return;
-      }
-      const { created, skipped } = data as { created: string[]; skipped: string[]; failed: string[] };
-      setStatus(`Seeded ${created.length} new students. ${skipped.length} already existed.`);
-      await loadUsers(accessToken);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not seed students.");
-    } finally {
-      setSeedLoading(false);
-    }
-  }
 
   async function handleEnroll(classId: string) {
     if (!accessToken || !enrollMemberId) return;
@@ -816,7 +800,7 @@ export default function App() {
                 <option value="">— No teacher assigned —</option>
                 {teachers.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.email}
+                    {displayName(t)}
                   </option>
                 ))}
               </select>
@@ -827,12 +811,7 @@ export default function App() {
 
             {/* Manage Classes */}
             <section className="stack">
-              <div className="panel-header">
-                <h2>Manage Classes</h2>
-                <button type="button" className="ghost" disabled={seedLoading} onClick={handleSeedStudents}>
-                  {seedLoading ? "Seeding..." : "Seed Test Students"}
-                </button>
-              </div>
+              <h2>Manage Classes</h2>
               {classesLoading ? (
                 <p>Loading classes...</p>
               ) : adminClasses.length === 0 ? (
@@ -863,7 +842,7 @@ export default function App() {
                             >
                               <option value="">— Select a member —</option>
                               {users.filter((u) => u.role === "member").map((u) => (
-                                <option key={u.id} value={u.id}>{u.email}</option>
+                                <option key={u.id} value={u.id}>{displayName(u)}</option>
                               ))}
                             </select>
                             <div className="split">
@@ -922,7 +901,7 @@ export default function App() {
                               <ul className="attendance-list">
                                 {checkinStudents.map((s) => (
                                   <li key={s.id} className="attendance-row">
-                                    <span>{s.email}</span>
+                                    <span>{displayName(s)}</span>
                                     <button
                                       type="button"
                                       className={s.checkedIn ? "status-present" : "ghost"}
@@ -959,7 +938,7 @@ export default function App() {
                 <ul className="class-list">
                   {users.map((u) => (
                     <li key={u.id} className="class-card">
-                      <p><strong>{u.email}</strong></p>
+                      <p><strong>{displayName(u)}</strong></p>
                       <p>Role: <em>{u.role}</em></p>
                       <div className="split">
                         {u.role !== "teacher" && (
@@ -1128,7 +1107,7 @@ export default function App() {
                     <ul className="attendance-list">
                       {attendanceStudents.map((student) => (
                         <li key={student.id} className="attendance-row">
-                          <span>{student.email}</span>
+                          <span>{displayName(student)}</span>
                           <div className="toggle-row">
                             {(["present", "late", "absent"] as AttendanceStatus[]).map((s) => (
                               <button
