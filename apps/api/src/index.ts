@@ -1041,6 +1041,16 @@ app.post("/api/admin/seed-students", async (request, response) => {
   const user = await requireUser(request, response, ["admin"]);
   if (!user) return;
 
+  // Delete any SQL-seeded members that have no email in auth (show as raw UUIDs)
+  const allAuthUsers = await fetchAllAuthUsers();
+  const authEmailMap = new Map(allAuthUsers.map((u) => [u.id, u.email ?? ""]));
+  const { data: memberRows } = await dbClient.from("users").select("id").eq("role", "member");
+  for (const row of memberRows ?? []) {
+    if (!authEmailMap.get(row.id)) {
+      await dbClient.auth.admin.deleteUser(row.id);
+    }
+  }
+
   const created: string[] = [];
   const skipped: string[] = [];
   const failed: string[] = [];
