@@ -1050,51 +1050,56 @@ const SEED_STUDENTS = [
 ];
 
 async function seedStudentsIfNeeded() {
-  try {
-    // Delete SQL-seeded members with no auth email (show as raw UUIDs)
-    const allAuthUsers = await fetchAllAuthUsers();
-    const authEmailMap = new Map(allAuthUsers.map((u) => [u.id, u.email ?? ""]));
-    const { data: memberRows } = await dbClient.from("users").select("id").eq("role", "member");
-    for (const row of memberRows ?? []) {
-      if (!authEmailMap.get(row.id)) {
-        await dbClient.auth.admin.deleteUser(row.id);
-        // Also delete directly from public.users — handles SQL-injected users
-        // that the auth admin API can't fully remove
-        await dbClient.from("users").delete().eq("id", row.id);
-      }
+  // Delete members with no auth email (SQL-injected UUID users)
+  const allAuthUsers = await fetchAllAuthUsers();
+  const authEmailMap = new Map(allAuthUsers.map((u) => [u.id, u.email ?? ""]));
+  const { data: memberRows } = await dbClient.from("users").select("id").eq("role", "member");
+  for (const row of memberRows ?? []) {
+    if (!authEmailMap.get(row.id)) {
+      await dbClient.auth.admin.deleteUser(row.id);
+      await dbClient.from("users").delete().eq("id", row.id);
     }
+  }
 
-    const refreshed = await fetchAllAuthUsers();
-    const existingEmails = new Map(refreshed.map((u) => [u.email?.toLowerCase() ?? "", u.id]));
+  const refreshed = await fetchAllAuthUsers();
+  const existingEmails = new Map(refreshed.map((u) => [u.email?.toLowerCase() ?? "", u.id]));
 
-    for (const student of SEED_STUDENTS) {
+  let created = 0;
+  let skipped = 0;
+  for (const student of SEED_STUDENTS) {
+    try {
       const existingId = existingEmails.get(student.email.toLowerCase());
       if (existingId) {
-        // Backfill full_name if missing
-        await dbClient
-          .from("users")
-          .update({ full_name: student.name })
-          .eq("id", existingId)
-          .is("full_name", null);
+        await dbClient.from("users").update({ full_name: student.name }).eq("id", existingId).is("full_name", null);
+        skipped++;
         continue;
       }
-
       const { data, error } = await dbClient.auth.admin.createUser({
         email: student.email,
         password: "SkatePass1!",
         email_confirm: true
       });
-      if (error || !data) continue;
-
-      await dbClient
+      if (error || !data) {
+        console.error(`Seed failed for ${student.email}:`, error?.message);
+        continue;
+      }
+      const { error: upsertErr } = await dbClient
         .from("users")
-        .upsert({ id: data.user.id, role: "member", full_name: student.name }, { onConflict: "id" });
+        .upsert({ id: data.user.id, role: "member" }, { onConflict: "id" });
+      if (upsertErr) {
+        console.error(`DB upsert failed for ${student.email}:`, upsertErr.message);
+        continue;
+      }
+      // Set full_name separately — non-fatal if column doesn't exist yet
+      await dbClient.from("users").update({ full_name: student.name }).eq("id", data.user.id);
+      created++;
+    } catch (err) {
+      console.error(`Unexpected error seeding ${student.email}:`, err);
     }
-    console.log("Student seed complete.");
-  } catch (err) {
-    console.error("Seed error:", err);
   }
+  console.log(`Seed complete: ${created} created, ${skipped} already existed.`);
 }
+
 
 app.listen(port, () => {
   console.log(`API listening on port ${port}`);
